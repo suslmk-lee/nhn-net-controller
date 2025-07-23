@@ -48,8 +48,9 @@
       --from-literal=NHN_VIP_SUBNET_ID="your-vip-subnet-id"
     ```
 
-    >> Tenant ID는 NHN Cloud Console에서 확인할 수 있습니다.
-<img width="1092" height="369" alt="Image" src="https://github.com/user-attachments/assets/ad4dc0bf-c95a-4ce8-8c75-e1dc7cedcc28" />
+     🎱 Tenant ID는 NHN Cloud Console에서 확인할 수 있습니다. (API 엔드포인트 클릭)
+
+    <img width="1092" height="369" alt="Image" src="https://github.com/user-attachments/assets/ad4dc0bf-c95a-4ce8-8c75-e1dc7cedcc28" />
 
 ### 3단계: 컨트롤러 배포
 
