@@ -1,5 +1,5 @@
 # Image URL to use all building/pushing image targets
-IMG ?= 44ce789b-kr1-registry.container.nhncloud.com/container-platform-registry/kube-controller02:latest
+IMG ?= registry-dev.k-paas.org/kpaas/nhn-controller:latest
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -115,6 +115,9 @@ docker-build: ## Build docker image with the manager.
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
 
+.PHONY: docker-build-push
+docker-build-push: docker-build docker-push ## Build and push docker image with the manager.
+
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
 # - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
@@ -160,6 +163,29 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 .PHONY: undeploy
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	$(KUSTOMIZE) build config/default | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
+
+##@ K8s Direct Deployment (Alternative to kustomize)
+
+.PHONY: deploy-direct
+deploy-direct: ## Deploy controller using k8s/ manifests directly (requires secret to be created separately)
+	$(KUBECTL) apply -f k8s/deploy.yaml
+
+.PHONY: undeploy-direct  
+undeploy-direct: ## Remove controller using k8s/ manifests directly
+	$(KUBECTL) delete -f k8s/deploy.yaml --ignore-not-found=true
+
+.PHONY: restart-controller
+restart-controller: ## Restart the controller deployment
+	$(KUBECTL) rollout restart deployment controller-manager -n k-paas-system
+
+.PHONY: logs
+logs: ## Show controller logs
+	$(KUBECTL) logs -f deployment/controller-manager -n k-paas-system
+
+.PHONY: status
+status: ## Show controller status
+	$(KUBECTL) get pods -n k-paas-system
+	$(KUBECTL) get deployment controller-manager -n k-paas-system
 
 ##@ Dependencies
 

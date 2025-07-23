@@ -128,15 +128,13 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
-      imagePullSecrets:
-        - name: ncr
       containers:
       - command:
         - /manager
         args:
         - --leader-elect
         - --health-probe-bind-address=:8081
-        image: 44ce789b-kr1-registry.container.nhncloud.com/container-platform-registry/k-paas-controller:latest
+        image: registry-dev.k-paas.org/kpaas/nhn-controller:latest
         name: manager
         envFrom:
         - secretRef:
