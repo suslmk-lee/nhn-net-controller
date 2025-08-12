@@ -37,6 +37,12 @@ type ServiceReconciler struct {
 //+kubebuilder:rbac:groups=core,resources=services/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=core,resources=services/finalizers,verbs=update
 //+kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
+//+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch
+//+kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list
+//+kubebuilder:rbac:groups=external-secrets.io,resources=secretstores,verbs=get;list
+//+kubebuilder:rbac:groups=external-secrets.io,resources=externalsecrets,verbs=get;list;watch
+//+kubebuilder:rbac:groups=openbao.openbao.org,resources=vaults,verbs=get;list
+//+kubebuilder:rbac:groups=openbao.openbao.org,resources=vaultconnections,verbs=get;list
 
 func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	var service corev1.Service

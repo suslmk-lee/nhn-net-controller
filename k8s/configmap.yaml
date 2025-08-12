@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nhncloud-config
+  namespace: k-paas-system
+data:
+  NHN_API_BASE_URL: "https://kr1-api-network-infrastructure.nhncloudservice.com"
+  NHN_AUTH_URL: "https://api-identity-infrastructure.nhncloudservice.com/v2.0/tokens"
+  NHN_VIP_SUBNET_ID: "7b027099-273f-4992-a8f4-f1f95371d196"

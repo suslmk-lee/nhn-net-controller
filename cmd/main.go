@@ -37,8 +37,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	"github.com/suslmk-lee/kube-controller02/internal/config"
 	"github.com/suslmk-lee/kube-controller02/internal/controller"
-	"github.com/suslmk-lee/kube-controller02/pkg/nhncloud"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -201,34 +201,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize NHN Cloud client
-	nhnBaseURL := os.Getenv("NHN_API_BASE_URL")
-	if nhnBaseURL == "" {
-		setupLog.Error(nil, "NHN_API_BASE_URL environment variable is required")
-		os.Exit(1)
-	}
-	nhnAuthURL := os.Getenv("NHN_AUTH_URL")
-	if nhnAuthURL == "" {
-		setupLog.Error(nil, "NHN_AUTH_URL environment variable is required")
-		os.Exit(1)
-	}
-	nhnTenantID := os.Getenv("NHN_TENANT_ID")
-	if nhnTenantID == "" {
-		setupLog.Error(nil, "NHN_TENANT_ID environment variable is required")
-		os.Exit(1)
-	}
-	nhnUsername := os.Getenv("NHN_USERNAME")
-	if nhnUsername == "" {
-		setupLog.Error(nil, "NHN_USERNAME environment variable is required")
-		os.Exit(1)
-	}
-	nhnPassword := os.Getenv("NHN_PASSWORD")
-	if nhnPassword == "" {
-		setupLog.Error(nil, "NHN_PASSWORD environment variable is required")
-		os.Exit(1)
+	// Initialize NHN Cloud client from Secret and ConfigMap
+	ctx := ctrl.SetupSignalHandler()
+
+	// Get controller namespace
+	namespace := os.Getenv("CONTROLLER_NAMESPACE")
+	if namespace == "" {
+		namespace = "k-paas-system" // Default namespace
 	}
 
-	nhnClient := nhncloud.NewClient(nhnBaseURL, nhnAuthURL, nhnTenantID, nhnUsername, nhnPassword)
+	nhnClient, err := config.Initialize(ctx, mgr.GetClient(), namespace)
+	if err != nil {
+		setupLog.Error(err, "failed to initialize NHN Cloud client")
+		os.Exit(1)
+	}
 
 	if err = (&controller.ServiceReconciler{
 		Client:    mgr.GetClient(),

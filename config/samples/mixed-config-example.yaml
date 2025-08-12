@@ -1,0 +1,47 @@
+# 개선된 설정 예시: Secret과 ConfigMap 분리
+
+# 1. 민감한 인증 정보는 Secret으로 관리
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nhncloud-credentials
+  namespace: k-paas-system
+type: Opaque
+stringData:
+  # 높은 민감도 - 반드시 Secret에 보관
+  NHN_USERNAME: "your-username"
+  NHN_PASSWORD: "your-password" 
+  NHN_TENANT_ID: "your-tenant-id"
+
+---
+# 2. 공개 설정 정보는 ConfigMap으로 관리
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nhncloud-config
+  namespace: k-paas-system
+data:
+  # 낮은 민감도 - ConfigMap으로도 충분
+  NHN_API_BASE_URL: "https://kr1-api-network-infrastructure.nhncloudservice.com"
+  NHN_AUTH_URL: "https://api-identity-infrastructure.nhncloudservice.com/v2.0/tokens"
+  NHN_VIP_SUBNET_ID: "7b027099-273f-4992-a8f4-f1f95371d196"
+
+---
+# 3. 컨트롤러 배포에서 두 리소스 모두 사용
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: k-paas-system
+spec:
+  template:
+    spec:
+      containers:
+      - name: manager
+        # Secret에서 민감한 정보
+        envFrom:
+        - secretRef:
+            name: nhncloud-credentials
+        # ConfigMap에서 설정 정보  
+        - configMapRef:
+            name: nhncloud-config
