@@ -215,7 +215,6 @@ func (c *Client) authenticate(ctx context.Context) error {
 		return nil
 	}
 
-
 	authReq := authRequest{
 		Auth: authRequestCredentials{
 			TenantID: c.tenantID,

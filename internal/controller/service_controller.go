@@ -255,7 +255,7 @@ func (r *ServiceReconciler) reconcileSubResources(ctx context.Context, service *
 
 func (r *ServiceReconciler) reconcilePort(ctx context.Context, lbID string, port corev1.ServicePort) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	
+
 	result, lb, err := r.waitForLoadBalancerActive(ctx, lbID)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -337,7 +337,7 @@ func (r *ServiceReconciler) ensureListener(ctx context.Context, lb *nhncloud.Loa
 	if lb.ProvisioningStatus != "ACTIVE" {
 		return nil, fmt.Errorf("load balancer %s is not active (status: %s), cannot create listener", lb.ID, lb.ProvisioningStatus)
 	}
-	
+
 	// Check if listener already exists for this port by name pattern
 	expectedName := fmt.Sprintf("listener-%s-%d", lb.ID, port.Port)
 	listeners, err := r.NHNClient.ListListeners(ctx)
@@ -529,7 +529,7 @@ func (r *ServiceReconciler) handleServiceDeletion(ctx context.Context, service *
 			lbID = service.Annotations[lbIDAnnotation]
 			fipID = service.Annotations[floatingIPIDAnnotation]
 		}
-		
+
 		if lbID != "" {
 			if err := r.NHNClient.DeleteLoadBalancer(ctx, lbID); err != nil {
 				if !strings.Contains(err.Error(), "404") {

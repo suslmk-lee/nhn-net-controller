@@ -1,5 +1,5 @@
 # Image URL to use all building/pushing image targets
-IMG ?= registry-dev.k-paas.org/kpaas/nhn-controller:latest
+IMG ?= registry-dev2.k-paas.org/kpaas/nhn-controller:latest
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
