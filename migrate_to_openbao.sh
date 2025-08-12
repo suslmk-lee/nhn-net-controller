@@ -8,15 +8,15 @@ DEPLOYMENT_NAME="controller-manager"
 SERVICE_ACCOUNT_NAME="controller-manager"
 K8S_SECRET_NAME="nhncloud-credentials"
 
-# root token:: cp경로에서 가져오는 방식으로 향후 변경
-OPENBAO_ROOT_TOKEN="${OPENBAO_ROOT_TOKEN}"
 OPENBAO_API_BASE="https://openbao.180.210.83.161.nip.io"
-
 OPENBAO_KV_PATH="secret/data/cloud-controller/nhncloud"
 OPENBAO_ROLE="controller-policy"
 
 # 디버그 모드 설정
 DEBUG_MODE="${DEBUG_MODE:-false}"
+
+# OpenBao Root Token 경로 설정
+OPENBAO_TOKEN_FILE="${OPENBAO_TOKEN_FILE:-~/workspace/container-platform/cp-portal-deployment/secmg/cp-vault-root-token}"
 # ---
 
 # --- 색상 및 로깅 함수 ---
@@ -44,6 +44,35 @@ log_error() {
     echo -e "${C_RED}[ERROR]${C_RESET} $1" >&2
     exit 1
 }
+
+# Root token 읽기 함수
+get_openbao_root_token() {
+    # 환경 변수가 설정되어 있으면 우선 사용
+    if [ -n "$OPENBAO_ROOT_TOKEN" ]; then
+        echo "$OPENBAO_ROOT_TOKEN"
+        return
+    fi
+
+    # 파일 경로 확장 (~/ -> 절대 경로)
+    local token_file=$(eval echo "$OPENBAO_TOKEN_FILE")
+
+    # 파일이 존재하고 읽을 수 있는지 확인
+    if [ -f "$token_file" ] && [ -r "$token_file" ]; then
+        local token=$(cat "$token_file" | tr -d '\n\r' | xargs)
+        if [ -n "$token" ]; then
+            log_debug "Root token을 파일에서 읽었습니다: $token_file" >&2
+            echo "$token"
+            return
+        fi
+    fi
+
+    # 폴백: 기본 토큰 (개발/테스트용)
+    log_warn "Root token 파일을 찾을 수 없습니다 ($token_file). 기본 토큰을 사용합니다." >&2
+    echo "s.AYpIIy4k2ISqdCLO2nN4JZMe1a"
+}
+
+# Root token 설정
+OPENBAO_ROOT_TOKEN=$(get_openbao_root_token)
 # ---
 
 # === 유틸리티 함수들 ===
