@@ -8,7 +8,7 @@ DEPLOYMENT_NAME="controller-manager"
 SERVICE_ACCOUNT_NAME="controller-manager"
 K8S_SECRET_NAME="nhncloud-credentials"
 
-OPENBAO_API_BASE="https://openbao.180.210.83.161.nip.io"
+OPENBAO_API_BASE="https://openbao.133.186.219.115.nip.io"
 OPENBAO_KV_PATH="secret/data/cloud-controller/nhncloud"
 OPENBAO_ROLE="controller-policy"
 
@@ -52,10 +52,10 @@ get_openbao_root_token() {
         echo "$OPENBAO_ROOT_TOKEN"
         return
     fi
-
+    
     # 파일 경로 확장 (~/ -> 절대 경로)
     local token_file=$(eval echo "$OPENBAO_TOKEN_FILE")
-
+    
     # 파일이 존재하고 읽을 수 있는지 확인
     if [ -f "$token_file" ] && [ -r "$token_file" ]; then
         local token=$(cat "$token_file" | tr -d '\n\r' | xargs)
@@ -65,10 +65,10 @@ get_openbao_root_token() {
             return
         fi
     fi
-
+    
     # 폴백: 기본 토큰 (개발/테스트용)
     log_warn "Root token 파일을 찾을 수 없습니다 ($token_file). 기본 토큰을 사용합니다." >&2
-    echo "s.AYpIIy4k2ISqdCLO2nN4JZMe1a"
+    echo "s.AYpIIy4k2ISqdCLO2nN4JZMe"
 }
 
 # Root token 설정
@@ -105,19 +105,43 @@ call_openbao_api() {
     local path="$2"
     local data="$3"
     local token="${4:-$OPENBAO_ROOT_TOKEN}"
-
+    
     local curl_args=(
-        -s
+        -s 
+        -k
+        -w "HTTP_CODE:%{http_code}"
         -X "$method"
         -H "X-Vault-Token: $token"
         -H "Content-Type: application/json"
     )
-
+    
     if [ -n "$data" ]; then
         curl_args+=(-d "$data")
     fi
-
-    curl "${curl_args[@]}" "${OPENBAO_API_BASE}/v1${path}"
+    
+    local full_url="${OPENBAO_API_BASE}/v1${path}"
+    log_debug "API 호출: $method $full_url"
+    
+    local response=$(curl "${curl_args[@]}" "$full_url")
+    local curl_exit_code=$?
+    
+    if [ $curl_exit_code -ne 0 ]; then
+        log_debug "curl 명령 실패 (exit code: $curl_exit_code)" >&2
+        return 1
+    fi
+    
+    local http_code=$(echo "$response" | grep -o "HTTP_CODE:[0-9]*" | cut -d: -f2)
+    local response_body=$(echo "$response" | sed 's/HTTP_CODE:[0-9]*$//')
+    
+    log_debug "HTTP Status: $http_code" >&2
+    log_debug "Response: $response_body" >&2
+    
+    if [ "$http_code" -ge 400 ]; then
+        log_debug "HTTP 오류 발생: $http_code" >&2
+        return 1
+    fi
+    
+    echo "$response_body"
 }
 
 # HTTP 응답 파싱 함수
@@ -134,6 +158,15 @@ validate_secret_exists
 log_success "사전 환경 체크 완료."
 
 # OpenBao 설정 함수들
+enable_kubernetes_auth() {
+    log_info "Kubernetes 인증 방식을 활성화합니다..."
+    local enable_data='{"type": "kubernetes"}'
+    
+    # 이미 활성화되어 있을 수 있으므로 에러 무시
+    call_openbao_api "POST" "/sys/auth/kubernetes" "$enable_data" >/dev/null 2>&1 || \
+        log_debug "Kubernetes 인증이 이미 활성화되어 있거나 활성화에 실패했습니다."
+}
+
 setup_kubernetes_auth() {
     log_info "Kubernetes 인증 방식을 설정합니다..."
     local k8s_api_server=$(kubectl config view --raw --minify --flatten -o jsonpath='{.clusters[].cluster.server}')
@@ -144,7 +177,7 @@ setup_kubernetes_auth() {
         \"kubernetes_host\": \"${k8s_api_server}\",
         \"kubernetes_ca_cert\": \"${k8s_ca_cert}\"
     }"
-
+    
     call_openbao_api "POST" "/auth/kubernetes/config" "$config_data" || \
         log_error "Kubernetes 인증 방식 설정에 실패했습니다."
 }
@@ -154,7 +187,7 @@ create_policy() {
     local policy_data='{
         "policy": "path \"secret/data/cloud-controller/nhncloud\" {\n  capabilities = [\"create\", \"read\", \"update\", \"delete\", \"list\"]\n}\npath \"secret/metadata/cloud-controller/nhncloud\" {\n  capabilities = [\"list\", \"read\", \"delete\"]\n}"
     }'
-
+    
     call_openbao_api "PUT" "/sys/policies/acl/controller-policy" "$policy_data" || \
         log_error "controller-policy 정책 생성에 실패했습니다."
 }
@@ -167,7 +200,7 @@ create_kubernetes_role() {
         \"policies\": [\"controller-policy\"],
         \"ttl\": \"24h\"
     }"
-
+    
     call_openbao_api "POST" "/auth/kubernetes/role/controller-policy" "$role_data" || \
         log_error "Kubernetes role 생성에 실패했습니다."
 }
@@ -175,7 +208,7 @@ create_kubernetes_role() {
 initialize_secret_path() {
     log_info "secret 경로를 초기화합니다..."
     local init_data='{"data": {}}'
-
+    
     if ! call_openbao_api "PUT" "/secret/data/cloud-controller/nhncloud" "$init_data" >/dev/null 2>&1; then
         log_warn "경로 초기화에 실패했습니다. 기존 경로가 있을 수 있습니다."
     fi
@@ -184,12 +217,13 @@ initialize_secret_path() {
 # === 1.5. OpenBao 초기 설정 ===
 setup_openbao() {
     log_info "OpenBao 초기 설정을 진행합니다..."
-
+    
+    enable_kubernetes_auth
     setup_kubernetes_auth
     create_policy
     create_kubernetes_role
     initialize_secret_path
-
+    
     log_success "OpenBao 초기 설정이 완료되었습니다."
 }
 
@@ -225,10 +259,10 @@ authenticate_with_openbao() {
 
     log_info "OpenBao에 로그인하여 클라이언트 토큰을 발급받습니다 (Role: $OPENBAO_ROLE)..."
     local login_payload="{\"role\":\"${OPENBAO_ROLE}\",\"jwt\":\"${K8S_SA_TOKEN}\"}"
-    local login_response=$(curl --connect-timeout 5 -s -w "HTTP_CODE:%{http_code}" \
+    local login_response=$(curl --connect-timeout 5 -s -k -w "HTTP_CODE:%{http_code}" \
         --request POST --header "Content-Type: application/json" \
         --data "$login_payload" "${OPENBAO_API_BASE}/v1/auth/kubernetes/login")
-
+    
     if [ $? -ne 0 ]; then
         log_error "OpenBao API(${OPENBAO_API_BASE})에 연결할 수 없습니다."
     fi
@@ -248,7 +282,7 @@ write_secret_to_openbao() {
     log_info "OpenBao 경로 '$OPENBAO_KV_PATH'에 데이터를 기록합니다..."
     log_debug "전체 URL = ${OPENBAO_API_BASE}/v1/${OPENBAO_KV_PATH}"
 
-    local write_response=$(curl -s -w "HTTP_CODE:%{http_code}" \
+    local write_response=$(curl -s -k -w "HTTP_CODE:%{http_code}" \
         --request PUT \
         --header "X-Vault-Token: ${OPENBAO_CLIENT_TOKEN}" \
         --header "Content-Type: application/json" \
@@ -266,7 +300,7 @@ write_secret_to_openbao() {
 
 verify_written_data() {
     log_info "데이터 기록 검증..."
-    local verify_response_code=$(curl -s -o /dev/null -w "%{http_code}" \
+    local verify_response_code=$(curl -s -k -o /dev/null -w "%{http_code}" \
         --header "X-Vault-Token: ${OPENBAO_CLIENT_TOKEN}" \
         "${OPENBAO_API_BASE}/v1/${OPENBAO_KV_PATH}")
 
@@ -278,11 +312,11 @@ verify_written_data() {
 # === 3. OpenBao에 인증정보 쓰기 ===
 migrate_secret_to_openbao() {
     log_info "OpenBao에 인증을 시도하고 Secret을 기록합니다..."
-
+    
     authenticate_with_openbao
     write_secret_to_openbao
     verify_written_data
-
+    
     log_success "OpenBao에 인증정보를 안전하게 기록하고 검증했습니다."
 }
 
@@ -291,11 +325,11 @@ migrate_secret_to_openbao
 # Deployment 설정 변경 함수들
 update_deployment_config() {
     log_info "Deployment '$DEPLOYMENT_NAME'의 설정을 변경합니다..."
-
+    
     # 기존 ConfigMap 참조 찾기
     local config_map_name=$(kubectl get deployment "$DEPLOYMENT_NAME" -n "$NAMESPACE" \
         -o jsonpath='{.spec.template.spec.containers[0].envFrom[?(@.configMapRef)].configMapRef.name}' 2>/dev/null)
-
+    
     if [ -z "$config_map_name" ]; then
         log_warn "기존 ConfigMap 참조를 찾지 못했습니다. 빈 envFrom을 사용합니다."
         config_map_name=""
@@ -348,7 +382,7 @@ EOF
 
     kubectl patch deployment "$DEPLOYMENT_NAME" -n "$NAMESPACE" --type='json' -p="$patch_payload" || \
         log_error "Deployment patch 적용에 실패했습니다."
-
+    
     log_success "Deployment에 OpenBao 설정을 적용했습니다."
 }
 
@@ -384,9 +418,9 @@ finalize_migration() {
     else
         log_warn "Deployment '$DEPLOYMENT_NAME'을 찾을 수 없습니다. Deployment 설정 변경을 건너뜁니다."
     fi
-
+    
     cleanup_original_secret
-
+    
     echo -e "\\n${C_GREEN}🎉 모든 마이그레이션 과정이 완료되었습니다!${C_RESET}"
 }
 
