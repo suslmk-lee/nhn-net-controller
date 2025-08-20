@@ -68,7 +68,7 @@ get_openbao_root_token() {
     
     # 폴백: 기본 토큰 (개발/테스트용)
     log_warn "Root token 파일을 찾을 수 없습니다 ($token_file). 기본 토큰을 사용합니다." >&2
-    echo "s.AYpIIy4k2ISqdCLO2nN4JZMe"
+    echo "s.AYpIIy4k2ISqdxxxxxxxx"
 }
 
 # Root token 설정
