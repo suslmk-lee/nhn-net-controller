@@ -22,10 +22,13 @@ import (
 	"os"
 	"path/filepath"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -49,6 +52,9 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+
+	// Add CRD schemes for auto-detection
+	utilruntime.Must(apiextv1.AddToScheme(scheme))
 
 	// +kubebuilder:scaffold:scheme
 }
@@ -201,7 +207,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize NHN Cloud client from Secret and ConfigMap
+	// Initialize NHN Cloud client.
+	// We need a non-cached client to read secrets before the manager is started.
+	// The manager's client (mgr.GetClient()) reads from a cache which is not populated until mgr.Start() is called.
+	initClient, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme()})
+	if err != nil {
+		setupLog.Error(err, "unable to create non-cached client for initialization")
+		os.Exit(1)
+	}
+
 	ctx := ctrl.SetupSignalHandler()
 
 	// Get controller namespace
@@ -210,7 +224,7 @@ func main() {
 		namespace = "k-paas-system" // Default namespace
 	}
 
-	nhnClient, err := config.Initialize(ctx, mgr.GetClient(), namespace)
+	nhnClient, err := config.Initialize(ctx, initClient, namespace)
 	if err != nil {
 		setupLog.Error(err, "failed to initialize NHN Cloud client")
 		os.Exit(1)
@@ -252,7 +266,7 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

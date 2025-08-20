@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -25,7 +26,18 @@ const (
 	floatingIPIDAnnotation    = "nhn.cloud/floating-ip-id"
 	controllerAnnotation      = "nhn.cloud/managed-by"
 	controllerAnnotationValue = "nhn-cloud-controller"
+	portStatusAnnotation      = "nhn.cloud/port-status"
 )
+
+// PortStatus tracks the reconciliation status of each port
+type PortStatus struct {
+	Port           int32  `json:"port"`
+	Protocol       string `json:"protocol"`
+	Status         string `json:"status"` // pending, active, failed
+	ListenerID     string `json:"listenerId,omitempty"`
+	PoolID         string `json:"poolId,omitempty"`
+	LastReconciled string `json:"lastReconciled,omitempty"`
+}
 
 type ServiceReconciler struct {
 	client.Client
@@ -242,24 +254,64 @@ func (r *ServiceReconciler) ensureLoadBalancer(ctx context.Context, service *cor
 }
 
 func (r *ServiceReconciler) reconcileSubResources(ctx context.Context, service *corev1.Service, lb *nhncloud.LoadBalancer) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
 	// First ensure load balancer is in ACTIVE state before making any changes
 	if lb.ProvisioningStatus != "ACTIVE" {
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
 	}
 
+	var needsRequeue bool
+	var requeueAfter time.Duration
+
 	for _, port := range service.Spec.Ports {
-		result, err := r.reconcilePort(ctx, lb.ID, port)
+		// Skip ports that are already completed
+		if r.isPortCompleted(service, port) {
+			logger.V(1).Info("Port already completed, skipping", "port", port.Port, "protocol", port.Protocol)
+			continue
+		}
+
+		logger.Info("Processing port", "port", port.Port, "protocol", port.Protocol)
+		result, err := r.reconcilePort(ctx, lb.ID, port, service)
 		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to reconcile port %d: %w", port.Port, err)
+			logger.Error(err, "Failed to reconcile port, continuing with other ports", "port", port.Port)
+			// Mark port as failed
+			if updateErr := r.updatePortStatus(ctx, service, port, "failed", "", ""); updateErr != nil {
+				logger.Error(updateErr, "Failed to update port status", "port", port.Port)
+			}
+			needsRequeue = true
+			if requeueAfter == 0 || (result.RequeueAfter > 0 && result.RequeueAfter < requeueAfter) {
+				requeueAfter = requeueDelay
+			}
+			continue // Continue processing other ports
 		}
 		if result.Requeue || result.RequeueAfter > 0 {
-			return result, nil
+			logger.Info("Port needs requeue, continuing with other ports", "port", port.Port, "requeueAfter", result.RequeueAfter)
+			// Mark port as pending
+			if updateErr := r.updatePortStatus(ctx, service, port, "pending", "", ""); updateErr != nil {
+				logger.Error(updateErr, "Failed to update port status", "port", port.Port)
+			}
+			needsRequeue = true
+			if requeueAfter == 0 || (result.RequeueAfter > 0 && result.RequeueAfter < requeueAfter) {
+				requeueAfter = result.RequeueAfter
+			}
+			continue // Continue processing other ports
 		}
+		logger.Info("Port reconciled successfully", "port", port.Port)
 	}
+
+	// Only requeue if at least one port needs it
+	if needsRequeue {
+		if requeueAfter > 0 {
+			return ctrl.Result{RequeueAfter: requeueAfter}, nil
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	return ctrl.Result{}, nil
 }
 
-func (r *ServiceReconciler) reconcilePort(ctx context.Context, lbID string, port corev1.ServicePort) (ctrl.Result, error) {
+func (r *ServiceReconciler) reconcilePort(ctx context.Context, lbID string, port corev1.ServicePort, service *corev1.Service) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	result, lb, err := r.waitForLoadBalancerActive(ctx, lbID)
@@ -321,7 +373,21 @@ func (r *ServiceReconciler) reconcilePort(ctx context.Context, lbID string, port
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
 	}
 
-	return r.waitForPoolMembersOnline(ctx, pool.ID)
+	result, err = r.waitForPoolMembersOnline(ctx, pool.ID)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if result.Requeue || result.RequeueAfter > 0 {
+		return result, nil
+	}
+
+	// Port is now fully reconciled - update status as active
+	if updateErr := r.updatePortStatus(ctx, service, port, "active", listener.ID, pool.ID); updateErr != nil {
+		logger.Error(updateErr, "Failed to update port status to active", "port", port.Port)
+		// Don't fail the reconciliation for status update errors
+	}
+
+	return ctrl.Result{}, nil
 }
 
 func (r *ServiceReconciler) waitForLoadBalancerActive(ctx context.Context, lbID string) (ctrl.Result, *nhncloud.LoadBalancer, error) {
@@ -592,6 +658,88 @@ func (r *ServiceReconciler) updateServiceAnnotation(ctx context.Context, service
 	}
 	service.Annotations[key] = value
 	return r.Patch(ctx, service, patch)
+}
+
+// getPortStatuses retrieves the current port reconciliation status from service annotations
+func (r *ServiceReconciler) getPortStatuses(service *corev1.Service) (map[string]*PortStatus, error) {
+	statuses := make(map[string]*PortStatus)
+
+	if service.Annotations == nil {
+		return statuses, nil
+	}
+
+	statusJson, exists := service.Annotations[portStatusAnnotation]
+	if !exists {
+		return statuses, nil
+	}
+
+	var portStatuses []*PortStatus
+	if err := json.Unmarshal([]byte(statusJson), &portStatuses); err != nil {
+		return statuses, err
+	}
+
+	for _, status := range portStatuses {
+		key := fmt.Sprintf("%d-%s", status.Port, status.Protocol)
+		statuses[key] = status
+	}
+
+	return statuses, nil
+}
+
+// updatePortStatus updates the status of a specific port and saves to service annotations
+func (r *ServiceReconciler) updatePortStatus(ctx context.Context, service *corev1.Service, port corev1.ServicePort, status string, listenerID, poolID string) error {
+	portStatuses, err := r.getPortStatuses(service)
+	if err != nil {
+		return err
+	}
+
+	key := fmt.Sprintf("%d-%s", port.Port, port.Protocol)
+	portStatus, exists := portStatuses[key]
+	if !exists {
+		portStatus = &PortStatus{
+			Port:     port.Port,
+			Protocol: string(port.Protocol),
+		}
+		portStatuses[key] = portStatus
+	}
+
+	portStatus.Status = status
+	if listenerID != "" {
+		portStatus.ListenerID = listenerID
+	}
+	if poolID != "" {
+		portStatus.PoolID = poolID
+	}
+	portStatus.LastReconciled = time.Now().Format(time.RFC3339)
+
+	// Convert back to array
+	var statusArray []*PortStatus
+	for _, ps := range portStatuses {
+		statusArray = append(statusArray, ps)
+	}
+
+	statusJson, err := json.Marshal(statusArray)
+	if err != nil {
+		return err
+	}
+
+	return r.updateServiceAnnotation(ctx, service, portStatusAnnotation, string(statusJson))
+}
+
+// isPortCompleted checks if a port has been fully reconciled
+func (r *ServiceReconciler) isPortCompleted(service *corev1.Service, port corev1.ServicePort) bool {
+	portStatuses, err := r.getPortStatuses(service)
+	if err != nil {
+		return false
+	}
+
+	key := fmt.Sprintf("%d-%s", port.Port, port.Protocol)
+	status, exists := portStatuses[key]
+	if !exists {
+		return false
+	}
+
+	return status.Status == "active" && status.ListenerID != "" && status.PoolID != ""
 }
 
 func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
