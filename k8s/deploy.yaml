@@ -172,11 +172,13 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
-        # OpenBao AppRole configuration
+        # Secret backend configuration
         - name: SECRET_MODE
-          value: "auto"
+          value: "auto"  # Enable auto-detection: OpenBao -> ESO -> Kubernetes
+        - name: SECRET_NAME
+          value: "nhncloud-credentials"  # Kubernetes Secret name for fallback mode
         - name: OPENBAO_APPROLE_SECRET
-          value: "controller-manager"
+          value: "controller-manager"   # Secret containing VAULT_ROLE_ID and VAULT_ROLE_NAME
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
