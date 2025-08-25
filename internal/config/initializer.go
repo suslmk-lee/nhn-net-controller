@@ -69,7 +69,7 @@ func LoadConfigFromEnv() SecretConfig {
 }
 
 // Initialize creates NHN Cloud client with auto-detected secret backend
-func Initialize(ctx context.Context, k8sClient client.Client, namespace string) (*nhncloud.Client, error) {
+func Initialize(ctx context.Context, k8sClient client.Client, namespace string) (*nhncloud.Client, *SecretDetector, error) {
 	logger := log.FromContext(ctx)
 
 	// Load configuration
@@ -81,7 +81,7 @@ func Initialize(ctx context.Context, k8sClient client.Client, namespace string) 
 	// Get credentials using auto-detection (OpenBao -> ESO -> Secret)
 	creds, err := detector.GetCredentials(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize credentials: %w", err)
+		return nil, nil, fmt.Errorf("failed to initialize credentials: %w", err)
 	}
 
 	logger.Info("Credentials successfully retrieved with auto-detection")
@@ -96,5 +96,5 @@ func Initialize(ctx context.Context, k8sClient client.Client, namespace string) 
 	)
 
 	logger.Info("NHN Cloud client initialized successfully")
-	return nhnClient, nil
+	return nhnClient, detector, nil
 }

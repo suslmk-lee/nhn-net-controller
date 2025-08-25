@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/suslmk-lee/kube-controller02/internal/config"
 	"github.com/suslmk-lee/kube-controller02/pkg/nhncloud"
 )
 
@@ -41,8 +41,9 @@ type PortStatus struct {
 
 type ServiceReconciler struct {
 	client.Client
-	Scheme    *runtime.Scheme
-	NHNClient *nhncloud.Client
+	Scheme         *runtime.Scheme
+	NHNClient      *nhncloud.Client
+	SecretDetector *config.SecretDetector
 }
 
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -57,6 +58,7 @@ type ServiceReconciler struct {
 //+kubebuilder:rbac:groups=openbao.openbao.org,resources=vaultconnections,verbs=get;list
 
 func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
 	var service corev1.Service
 	if err := r.Get(ctx, req.NamespacedName, &service); err != nil {
 		if errors.IsNotFound(err) {
@@ -65,19 +67,34 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	if service.Spec.Type != corev1.ServiceTypeLoadBalancer {
-		return ctrl.Result{}, nil
-	}
-
 	// Check if this service should be managed by our controller
 	if !r.shouldManageService(&service) {
+		// If we are not supposed to manage it, but it has our finalizer, we should clean up
+		if controllerutil.ContainsFinalizer(&service, finalizerName) {
+			logger.Info("Service is no longer managed by this controller, cleaning up resources.")
+			return r.handleServiceDeletion(ctx, &service)
+		}
 		return ctrl.Result{}, nil
 	}
 
+	// Handle service deletion (when kubectl delete service is called)
 	if !service.ObjectMeta.DeletionTimestamp.IsZero() {
 		return r.handleServiceDeletion(ctx, &service)
 	}
 
+	// If the service is NOT a LoadBalancer, but STILL has our finalizer,
+	// it means the type was changed from LoadBalancer. We need to clean up the LB.
+	if service.Spec.Type != corev1.ServiceTypeLoadBalancer {
+		if controllerutil.ContainsFinalizer(&service, finalizerName) {
+			logger.Info("Service type changed from LoadBalancer, cleaning up resources.")
+			return r.handleServiceDeletion(ctx, &service)
+		}
+		// If the type is not LoadBalancer and there's no finalizer, we have nothing to do.
+		return ctrl.Result{}, nil
+	}
+
+	// If we reach here, the service IS a LoadBalancer.
+	// We proceed with the normal reconciliation logic to create/update the LB.
 	return r.reconcileLoadBalancer(ctx, &service)
 }
 
@@ -217,6 +234,8 @@ func (r *ServiceReconciler) checkAndUpdateStatus(ctx context.Context, service *c
 }
 
 func (r *ServiceReconciler) ensureLoadBalancer(ctx context.Context, service *corev1.Service) (*nhncloud.LoadBalancer, error) {
+	logger := log.FromContext(ctx)
+
 	var lbID string
 	if service.Annotations != nil {
 		lbID = service.Annotations[lbIDAnnotation]
@@ -234,12 +253,20 @@ func (r *ServiceReconciler) ensureLoadBalancer(ctx context.Context, service *cor
 		}
 	}
 
+	// Get credentials including VIP subnet ID from SecretDetector
+	creds, err := r.SecretDetector.GetCredentials(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get credentials: %w", err)
+	}
+
+	logger.Info("Creating LoadBalancer with VIP subnet", "vipSubnetID", creds.VIPSubnetID)
+
 	lbName := fmt.Sprintf("k8s-%s-%s-%s", service.Namespace, service.Name, service.UID[:8])
 	req := &nhncloud.CreateLoadBalancerRequest{
 		LoadBalancer: nhncloud.CreateLoadBalancerSpec{
 			Name:        lbName,
 			Description: fmt.Sprintf("Load balancer for Kubernetes service %s/%s", service.Namespace, service.Name),
-			VipSubnetID: os.Getenv("NHN_VIP_SUBNET_ID"),
+			VipSubnetID: creds.VIPSubnetID,
 		},
 	}
 	newLB, err := r.NHNClient.CreateLoadBalancer(ctx, req)

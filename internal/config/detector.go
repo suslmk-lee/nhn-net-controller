@@ -319,12 +319,19 @@ func (d *SecretDetector) getPublicConfigFromConfigMap(ctx context.Context, creds
 		Namespace: d.namespace,
 	}
 
+	logger.Info("Attempting to get ConfigMap", "configMap", configMapName, "namespace", d.namespace)
+
 	if err := d.client.Get(ctx, configKey, &configMap); err != nil {
-		logger.Info("ConfigMap not found, using environment variables", "configMap", configMapName)
+		logger.Info("ConfigMap not found, using environment variables", "configMap", configMapName, "error", err)
 		// Use environment variables when ConfigMap is not available
 		creds.APIBaseURL = getEnvOrDefault("NHN_API_BASE_URL", "https://kr1-api-network-infrastructure.nhncloudservice.com")
 		creds.AuthURL = getEnvOrDefault("NHN_AUTH_URL", "https://api-identity-infrastructure.nhncloudservice.com/v2.0/tokens")
 		creds.VIPSubnetID = getEnvOrDefault("NHN_VIP_SUBNET_ID", "7b027099-273f-4992-a8f4-f1f95371d196") // Default subnet
+
+		logger.Info("Using environment variables",
+			"APIBaseURL", creds.APIBaseURL,
+			"AuthURL", creds.AuthURL,
+			"VIPSubnetID", creds.VIPSubnetID)
 		return nil
 	}
 
@@ -332,6 +339,12 @@ func (d *SecretDetector) getPublicConfigFromConfigMap(ctx context.Context, creds
 	creds.APIBaseURL = getValueOrDefault(configMap.Data["NHN_API_BASE_URL"], "NHN_API_BASE_URL", "https://kr1-api-network-infrastructure.nhncloudservice.com")
 	creds.AuthURL = getValueOrDefault(configMap.Data["NHN_AUTH_URL"], "NHN_AUTH_URL", "https://api-identity-infrastructure.nhncloudservice.com/v2.0/tokens")
 	creds.VIPSubnetID = getValueOrDefault(configMap.Data["NHN_VIP_SUBNET_ID"], "NHN_VIP_SUBNET_ID", "7b027099-273f-4992-a8f4-f1f95371d196")
+
+	logger.Info("ConfigMap values loaded",
+		"APIBaseURL", creds.APIBaseURL,
+		"AuthURL", creds.AuthURL,
+		"VIPSubnetID", creds.VIPSubnetID,
+		"configMapVIPSubnetID", configMap.Data["NHN_VIP_SUBNET_ID"])
 
 	return nil
 }

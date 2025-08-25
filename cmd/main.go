@@ -224,16 +224,17 @@ func main() {
 		namespace = "k-paas-system" // Default namespace
 	}
 
-	nhnClient, err := config.Initialize(ctx, initClient, namespace)
+	nhnClient, secretDetector, err := config.Initialize(ctx, initClient, namespace)
 	if err != nil {
 		setupLog.Error(err, "failed to initialize NHN Cloud client")
 		os.Exit(1)
 	}
 
 	if err = (&controller.ServiceReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		NHNClient: nhnClient,
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		NHNClient:      nhnClient,
+		SecretDetector: secretDetector,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Service")
 		os.Exit(1)
