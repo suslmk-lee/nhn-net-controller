@@ -29,10 +29,11 @@ type SecretManagement struct {
 
 // OpenBaoConfig defines OpenBao specific configuration
 type OpenBaoConfig struct {
-	Address   string `yaml:"address"`
-	Path      string `yaml:"path"`
-	Role      string `yaml:"role"`
-	Namespace string `yaml:"namespace"`
+	Address       string `yaml:"address"`
+	Path          string `yaml:"path"`
+	Role          string `yaml:"role"`
+	Namespace     string `yaml:"namespace"`
+	AppRoleSecret string `yaml:"appRoleSecret"` // Name of secret containing VAULT_ROLE_ID and VAULT_ROLE_NAME
 }
 
 // ESOConfig defines External Secrets Operator configuration

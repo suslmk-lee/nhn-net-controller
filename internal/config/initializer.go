@@ -18,10 +18,11 @@ func DefaultSecretConfig() SecretConfig {
 		Management: SecretManagement{
 			Mode: "auto", // Default to auto-detection: OpenBao -> ESO -> Kubernetes
 			OpenBao: OpenBaoConfig{
-				Address:   "http://openbao.openbao-system.svc.cluster.local:8200",
-				Path:      "secret/data/k-paas/nhn-controller",
-				Role:      "nhn-controller",
-				Namespace: "openbao-system",
+				Address:       "http://openbao.openbao-system.svc.cluster.local:8200",
+				Path:          "secret/data/k-paas/nhn-controller",
+				Role:          "nhn-controller",
+				Namespace:     "openbao-system",
+				AppRoleSecret: "cp-portal-secret",
 			},
 			ESO: ESOConfig{
 				ExternalSecretName: "nhncloud-credentials-external",
@@ -58,6 +59,10 @@ func LoadConfigFromEnv() SecretConfig {
 
 	if externalSecretName := os.Getenv("ESO_EXTERNAL_SECRET_NAME"); externalSecretName != "" {
 		config.Management.ESO.ExternalSecretName = externalSecretName
+	}
+
+	if appRoleSecret := os.Getenv("OPENBAO_APPROLE_SECRET"); appRoleSecret != "" {
+		config.Management.OpenBao.AppRoleSecret = appRoleSecret
 	}
 
 	return config

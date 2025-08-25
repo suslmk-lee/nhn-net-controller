@@ -1,8 +1,13 @@
 package config
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -21,6 +26,28 @@ type ProviderCredentials struct {
 	Username    string
 	Password    string
 	VIPSubnetID string
+}
+
+// AppRoleAuthRequest represents OpenBao AppRole authentication request
+type AppRoleAuthRequest struct {
+	RoleID   string `json:"role_id"`
+	SecretID string `json:"secret_id,omitempty"`
+}
+
+// AppRoleAuthResponse represents OpenBao AppRole authentication response
+type AppRoleAuthResponse struct {
+	Auth struct {
+		ClientToken   string `json:"client_token"`
+		Accessor      string `json:"accessor"`
+		LeaseDuration int    `json:"lease_duration"`
+	} `json:"auth"`
+}
+
+// OpenBaoSecretResponse represents secret data from OpenBao
+type OpenBaoSecretResponse struct {
+	Data struct {
+		Data map[string]interface{} `json:"data"`
+	} `json:"data"`
 }
 
 // SecretDetector handles backend detection and credential retrieval
@@ -247,16 +274,37 @@ func (d *SecretDetector) getCredentialsFromESO(ctx context.Context) (*ProviderCr
 // getCredentialsFromOpenBao retrieves credentials from OpenBao
 func (d *SecretDetector) getCredentialsFromOpenBao(ctx context.Context) (*ProviderCredentials, error) {
 	logger := log.FromContext(ctx)
-	logger.Info("Retrieving sensitive credentials from OpenBao", "address", d.config.Management.OpenBao.Address)
+	logger.Info("Retrieving sensitive credentials from OpenBao using AppRole", "address", d.config.Management.OpenBao.Address)
 
-	// TODO: Implement OpenBao client integration
-	// This would involve:
-	// 1. Initialize OpenBao client
-	// 2. Authenticate using Kubernetes service account
-	// 3. Read secret from specified path (sensitive data only)
+	// 1. Get AppRole credentials from cp-portal-secret
+	roleID, roleName, err := d.getAppRoleCredentials(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get AppRole credentials: %w", err)
+	}
+
+	// 2. Authenticate with OpenBao using AppRole
+	token, err := d.authenticateWithOpenBao(ctx, roleID, roleName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to authenticate with OpenBao: %w", err)
+	}
+
+	// 3. Retrieve NHN credentials from OpenBao
+	creds, err := d.retrieveCredentialsFromOpenBao(ctx, token)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve credentials from OpenBao: %w", err)
+	}
+
 	// 4. Get public config from ConfigMap
+	if err := d.getPublicConfigFromConfigMap(ctx, creds); err != nil {
+		return nil, err
+	}
 
-	return nil, fmt.Errorf("OpenBao integration not yet implemented")
+	// 5. Validate required fields
+	if err := d.validateCredentials(creds); err != nil {
+		return nil, fmt.Errorf("invalid credentials from OpenBao: %w", err)
+	}
+
+	return creds, nil
 }
 
 // getPublicConfigFromConfigMap retrieves public configuration from ConfigMap
@@ -272,18 +320,18 @@ func (d *SecretDetector) getPublicConfigFromConfigMap(ctx context.Context, creds
 	}
 
 	if err := d.client.Get(ctx, configKey, &configMap); err != nil {
-		logger.Info("ConfigMap not found, using defaults", "configMap", configMapName)
-		// Use defaults for public config
-		creds.APIBaseURL = "https://kr1-api-network-infrastructure.nhncloudservice.com"
-		creds.AuthURL = "https://api-identity-infrastructure.nhncloudservice.com/v2.0/tokens"
-		creds.VIPSubnetID = "" // This should be set in ConfigMap
+		logger.Info("ConfigMap not found, using environment variables", "configMap", configMapName)
+		// Use environment variables when ConfigMap is not available
+		creds.APIBaseURL = getEnvOrDefault("NHN_API_BASE_URL", "https://kr1-api-network-infrastructure.nhncloudservice.com")
+		creds.AuthURL = getEnvOrDefault("NHN_AUTH_URL", "https://api-identity-infrastructure.nhncloudservice.com/v2.0/tokens")
+		creds.VIPSubnetID = getEnvOrDefault("NHN_VIP_SUBNET_ID", "7b027099-273f-4992-a8f4-f1f95371d196") // Default subnet
 		return nil
 	}
 
-	// Extract public configuration from ConfigMap
-	creds.APIBaseURL = configMap.Data["NHN_API_BASE_URL"]
-	creds.AuthURL = configMap.Data["NHN_AUTH_URL"]
-	creds.VIPSubnetID = configMap.Data["NHN_VIP_SUBNET_ID"]
+	// ConfigMap found - use ConfigMap values with environment variable override
+	creds.APIBaseURL = getValueOrDefault(configMap.Data["NHN_API_BASE_URL"], "NHN_API_BASE_URL", "https://kr1-api-network-infrastructure.nhncloudservice.com")
+	creds.AuthURL = getValueOrDefault(configMap.Data["NHN_AUTH_URL"], "NHN_AUTH_URL", "https://api-identity-infrastructure.nhncloudservice.com/v2.0/tokens")
+	creds.VIPSubnetID = getValueOrDefault(configMap.Data["NHN_VIP_SUBNET_ID"], "NHN_VIP_SUBNET_ID", "7b027099-273f-4992-a8f4-f1f95371d196")
 
 	return nil
 }
@@ -324,4 +372,160 @@ func (d *SecretDetector) validateCredentials(creds *ProviderCredentials) error {
 	}
 
 	return nil
+}
+
+// getAppRoleCredentials retrieves VAULT_ROLE_ID and VAULT_ROLE_NAME from configured secret
+func (d *SecretDetector) getAppRoleCredentials(ctx context.Context) (roleID, roleName string, err error) {
+	logger := log.FromContext(ctx)
+	logger.Info("Retrieving AppRole credentials from secret")
+
+	var secret corev1.Secret
+	secretName := d.config.Management.OpenBao.AppRoleSecret
+	if secretName == "" {
+		secretName = "cp-portal-secret" // Fallback to default name
+	}
+
+	secretKey := types.NamespacedName{
+		Name:      secretName,
+		Namespace: d.namespace,
+	}
+
+	if err := d.client.Get(ctx, secretKey, &secret); err != nil {
+		return "", "", fmt.Errorf("failed to get AppRole secret %s: %w", secretName, err)
+	}
+
+	roleID = string(secret.Data["VAULT_ROLE_ID"])
+	roleName = string(secret.Data["VAULT_ROLE_NAME"])
+
+	if roleID == "" {
+		return "", "", fmt.Errorf("VAULT_ROLE_ID not found in secret %s", secretName)
+	}
+	if roleName == "" {
+		return "", "", fmt.Errorf("VAULT_ROLE_NAME not found in secret %s", secretName)
+	}
+
+	logger.Info("Successfully retrieved AppRole credentials", "roleName", roleName)
+	return roleID, roleName, nil
+}
+
+// authenticateWithOpenBao authenticates with OpenBao using AppRole
+func (d *SecretDetector) authenticateWithOpenBao(ctx context.Context, roleID, roleName string) (string, error) {
+	logger := log.FromContext(ctx)
+	logger.Info("Authenticating with OpenBao using AppRole", "roleName", roleName)
+
+	// For AppRole authentication without secret_id (if configured for no secret_id)
+	authReq := AppRoleAuthRequest{
+		RoleID: roleID,
+	}
+
+	reqBody, err := json.Marshal(authReq)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal auth request: %w", err)
+	}
+
+	// Make authentication request to OpenBao
+	authURL := fmt.Sprintf("%s/v1/auth/approle/login", d.config.Management.OpenBao.Address)
+	req, err := http.NewRequestWithContext(ctx, "POST", authURL, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return "", fmt.Errorf("failed to create auth request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to authenticate with OpenBao: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("authentication failed, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var authResp AppRoleAuthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
+		return "", fmt.Errorf("failed to decode auth response: %w", err)
+	}
+
+	if authResp.Auth.ClientToken == "" {
+		return "", fmt.Errorf("no client token received from OpenBao")
+	}
+
+	logger.Info("Successfully authenticated with OpenBao")
+	return authResp.Auth.ClientToken, nil
+}
+
+// retrieveCredentialsFromOpenBao retrieves NHN credentials from OpenBao using the token
+func (d *SecretDetector) retrieveCredentialsFromOpenBao(ctx context.Context, token string) (*ProviderCredentials, error) {
+	logger := log.FromContext(ctx)
+	logger.Info("Retrieving NHN credentials from OpenBao", "path", d.config.Management.OpenBao.Path)
+
+	// Make request to retrieve secret from OpenBao
+	secretURL := fmt.Sprintf("%s/v1/%s", d.config.Management.OpenBao.Address, d.config.Management.OpenBao.Path)
+	req, err := http.NewRequestWithContext(ctx, "GET", secretURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create secret request: %w", err)
+	}
+
+	req.Header.Set("X-Vault-Token", token)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve secret from OpenBao: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("secret retrieval failed, status: %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var secretResp OpenBaoSecretResponse
+	if err := json.NewDecoder(resp.Body).Decode(&secretResp); err != nil {
+		return nil, fmt.Errorf("failed to decode secret response: %w", err)
+	}
+
+	// Extract NHN credentials from secret data
+	data := secretResp.Data.Data
+
+	creds := &ProviderCredentials{}
+
+	if tenantID, ok := data["NHN_TENANT_ID"].(string); ok {
+		creds.TenantID = tenantID
+	}
+	if username, ok := data["NHN_USERNAME"].(string); ok {
+		creds.Username = username
+	}
+	if password, ok := data["NHN_PASSWORD"].(string); ok {
+		creds.Password = password
+	}
+
+	logger.Info("Successfully retrieved NHN credentials from OpenBao")
+	return creds, nil
+}
+
+// getEnvOrDefault returns environment variable value or default if not set
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
+// getValueOrDefault returns value with priority: env var > configmap value > default
+func getValueOrDefault(configValue, envKey, defaultValue string) string {
+	// 1st priority: Environment variable
+	if envValue := os.Getenv(envKey); envValue != "" {
+		return envValue
+	}
+	// 2nd priority: ConfigMap value
+	if configValue != "" {
+		return configValue
+	}
+	// 3rd priority: Default value
+	return defaultValue
 }

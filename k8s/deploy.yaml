@@ -142,18 +142,18 @@ metadata:
   name: controller-manager
   namespace: k-paas-system
   labels:
-    control-plane: controller-manager
+    app: controller-manager
 spec:
   selector:
     matchLabels:
-      control-plane: controller-manager
+      app: controller-manager
   replicas: 1
   template:
     metadata:
       annotations:
         kubectl.kubernetes.io/default-container: manager
       labels:
-        control-plane: controller-manager
+        app: controller-manager
     spec:
       securityContext:
         runAsNonRoot: true
@@ -167,16 +167,16 @@ spec:
         - --health-probe-bind-address=:8081
         image: registry-dev2.k-paas.org/kpaas/nhn-controller:latest
         name: manager
-        envFrom:
-        - secretRef:
-            name: nhncloud-credentials
-        - configMapRef:
-            name: nhncloud-config
         env:
         - name: CONTROLLER_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        # OpenBao AppRole configuration
+        - name: SECRET_MODE
+          value: "auto"
+        - name: OPENBAO_APPROLE_SECRET
+          value: "controller-manager"
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
