@@ -165,7 +165,7 @@ spec:
         args:
         - --leader-elect
         - --health-probe-bind-address=:8081
-        image: registry-dev2.k-paas.org/kpaas/nhn-controller:latest
+        image: registry-dev2.k-paas.org/kpaas/nhn-controller:v1.0.0
         name: manager
         env:
         - name: CONTROLLER_NAMESPACE
