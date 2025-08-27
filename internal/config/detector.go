@@ -107,19 +107,41 @@ func (d *SecretDetector) DetectBackend(ctx context.Context) (SecretBackend, erro
 
 // checkOpenBaoAvailability checks if OpenBao is available
 func (d *SecretDetector) checkOpenBaoAvailability(ctx context.Context) bool {
-	// Check for OpenBao CRD
+	logger := log.FromContext(ctx)
+
+	namespace := d.config.Management.OpenBao.Namespace
+	if namespace == "" {
+		namespace = "openbao" // 기본 네임스페이스
+	}
+
+	logger.V(1).Info("Checking OpenBao availability", "namespace", namespace)
+
+	if d.checkServiceExists(ctx, "openbao", namespace) {
+		logger.V(1).Info("OpenBao service found", "namespace", namespace)
+		return true
+	}
+
+	if namespace != "openbao" {
+		if d.checkServiceExists(ctx, "openbao", "openbao") {
+			logger.V(1).Info("OpenBao service found in default openbao namespace")
+			return true
+		}
+	}
+
+	// CRD 기반 OpenBao도 확인 (일부 배포에서는 CRD 사용)
 	openbaoGVR := schema.GroupVersionResource{
 		Group:    "openbao.openbao.org",
 		Version:  "v1alpha1",
 		Resource: "vaults",
 	}
 
-	if !d.checkCRDExists(ctx, openbaoGVR) {
-		return false
+	if d.checkCRDExists(ctx, openbaoGVR) {
+		logger.V(1).Info("OpenBao CRD found")
+		return true
 	}
 
-	// Check for OpenBao service
-	return d.checkServiceExists(ctx, "openbao", d.config.Management.OpenBao.Namespace)
+	logger.V(1).Info("OpenBao not detected")
+	return false
 }
 
 // checkESOAvailability checks if External Secrets Operator is available
