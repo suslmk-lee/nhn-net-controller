@@ -467,8 +467,8 @@ func (d *SecretDetector) authenticateWithOpenBao(ctx context.Context, roleID, ro
 
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	httpClient := &http.Client{}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to authenticate with OpenBao: %w", err)
 	}
@@ -507,8 +507,8 @@ func (d *SecretDetector) retrieveCredentialsFromOpenBao(ctx context.Context, tok
 	req.Header.Set("X-Vault-Token", token)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	httpClient := &http.Client{}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to retrieve secret from OpenBao: %w", err)
 	}
