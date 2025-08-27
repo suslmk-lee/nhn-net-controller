@@ -299,13 +299,13 @@ func (d *SecretDetector) getCredentialsFromOpenBao(ctx context.Context) (*Provid
 	logger.Info("Retrieving sensitive credentials from OpenBao using AppRole", "address", d.config.Management.OpenBao.Address)
 
 	// 1. Get AppRole credentials from cp-portal-secret
-	roleID, roleName, err := d.getAppRoleCredentials(ctx)
+	roleID, roleName, secretID, err := d.getAppRoleCredentials(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get AppRole credentials: %w", err)
 	}
 
 	// 2. Authenticate with OpenBao using AppRole
-	token, err := d.authenticateWithOpenBao(ctx, roleID, roleName)
+	token, err := d.authenticateWithOpenBao(ctx, roleID, roleName, secretID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to authenticate with OpenBao: %w", err)
 	}
@@ -409,8 +409,8 @@ func (d *SecretDetector) validateCredentials(creds *ProviderCredentials) error {
 	return nil
 }
 
-// getAppRoleCredentials retrieves VAULT_ROLE_ID and VAULT_ROLE_NAME from configured secret
-func (d *SecretDetector) getAppRoleCredentials(ctx context.Context) (roleID, roleName string, err error) {
+// getAppRoleCredentials retrieves VAULT_ROLE_ID, VAULT_ROLE_NAME and VAULT_SECRET_ID from configured secret
+func (d *SecretDetector) getAppRoleCredentials(ctx context.Context) (roleID, roleName, secretID string, err error) {
 	logger := log.FromContext(ctx)
 	logger.Info("Retrieving AppRole credentials from secret")
 
@@ -426,31 +426,36 @@ func (d *SecretDetector) getAppRoleCredentials(ctx context.Context) (roleID, rol
 	}
 
 	if err := d.client.Get(ctx, secretKey, &secret); err != nil {
-		return "", "", fmt.Errorf("failed to get AppRole secret %s: %w", secretName, err)
+		return "", "", "", fmt.Errorf("failed to get AppRole secret %s: %w", secretName, err)
 	}
 
 	roleID = string(secret.Data["VAULT_ROLE_ID"])
 	roleName = string(secret.Data["VAULT_ROLE_NAME"])
+	secretID = string(secret.Data["VAULT_SECRET_ID"])
 
 	if roleID == "" {
-		return "", "", fmt.Errorf("VAULT_ROLE_ID not found in secret %s", secretName)
+		return "", "", "", fmt.Errorf("VAULT_ROLE_ID not found in secret %s", secretName)
 	}
 	if roleName == "" {
-		return "", "", fmt.Errorf("VAULT_ROLE_NAME not found in secret %s", secretName)
+		return "", "", "", fmt.Errorf("VAULT_ROLE_NAME not found in secret %s", secretName)
+	}
+	if secretID == "" {
+		return "", "", "", fmt.Errorf("VAULT_SECRET_ID not found in secret %s", secretName)
 	}
 
 	logger.Info("Successfully retrieved AppRole credentials", "roleName", roleName)
-	return roleID, roleName, nil
+	return roleID, roleName, secretID, nil
 }
 
 // authenticateWithOpenBao authenticates with OpenBao using AppRole
-func (d *SecretDetector) authenticateWithOpenBao(ctx context.Context, roleID, roleName string) (string, error) {
+func (d *SecretDetector) authenticateWithOpenBao(ctx context.Context, roleID, roleName, secretID string) (string, error) {
 	logger := log.FromContext(ctx)
 	logger.Info("Authenticating with OpenBao using AppRole", "roleName", roleName)
 
-	// For AppRole authentication without secret_id (if configured for no secret_id)
+	// AppRole authentication with secret_id
 	authReq := AppRoleAuthRequest{
-		RoleID: roleID,
+		RoleID:   roleID,
+		SecretID: secretID,
 	}
 
 	reqBody, err := json.Marshal(authReq)
