@@ -647,6 +647,15 @@ func (r *ServiceReconciler) handleServiceDeletion(ctx context.Context, service *
 
 		patch := client.MergeFrom(service.DeepCopy())
 		controllerutil.RemoveFinalizer(service, finalizerName)
+
+		// Clean up all NHN Cloud annotations
+		if service.Annotations != nil {
+			delete(service.Annotations, lbIDAnnotation)
+			delete(service.Annotations, floatingIPIDAnnotation)
+			delete(service.Annotations, controllerAnnotation)
+			delete(service.Annotations, portStatusAnnotation)
+		}
+
 		if err := r.Patch(ctx, service, patch); err != nil {
 			return ctrl.Result{}, err
 		}
