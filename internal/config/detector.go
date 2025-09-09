@@ -111,7 +111,7 @@ func (d *SecretDetector) checkOpenBaoAvailability(ctx context.Context) bool {
 
 	namespace := d.config.Management.OpenBao.Namespace
 	if namespace == "" {
-		namespace = "openbao" // 기본 네임스페이스
+		namespace = "k-paas-system" // 클러스터용 Openbao
 	}
 
 	logger.V(1).Info("Checking OpenBao availability", "namespace", namespace)
@@ -121,9 +121,9 @@ func (d *SecretDetector) checkOpenBaoAvailability(ctx context.Context) bool {
 		return true
 	}
 
-	if namespace != "openbao" {
+	if namespace != "k-paas-system" {
 		if d.checkServiceExists(ctx, "openbao", "openbao") {
-			logger.V(1).Info("OpenBao service found in default openbao namespace")
+			logger.V(1).Info("OpenBao service found in default k-paas-system namespace")
 			return true
 		}
 	}
