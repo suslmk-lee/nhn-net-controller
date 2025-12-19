@@ -18,7 +18,7 @@ func DefaultSecretConfig() SecretConfig {
 		Management: SecretManagement{
 			Mode: "auto", // Default to auto-detection: OpenBao -> ESO -> Kubernetes
 			OpenBao: OpenBaoConfig{
-				Address:       "http://openbao.k-paas-system.svc.cluster.local:8200",
+				Address:       "http://controller-vault.k-paas-system.svc.cluster.local:8200",
 				Path:          "secret/data/csp/nhncloud",
 				Role:          "nhn-controller",
 				Namespace:     "k-paas-system",

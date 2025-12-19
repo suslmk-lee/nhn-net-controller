@@ -70,7 +70,7 @@ func NewSecretDetector(client client.Client, config SecretConfig, namespace stri
 func (d *SecretDetector) DetectBackend(ctx context.Context) (SecretBackend, error) {
 	logger := log.FromContext(ctx)
 
-	// If mode is explicitly set, respect it (except for auto)
+	// If a mode is explicitly set, respect it (except for auto)
 	switch d.config.Management.Mode {
 	case "openbao":
 		return BackendOpenBao, nil
@@ -116,13 +116,13 @@ func (d *SecretDetector) checkOpenBaoAvailability(ctx context.Context) bool {
 
 	logger.V(1).Info("Checking OpenBao availability", "namespace", namespace)
 
-	if d.checkServiceExists(ctx, "openbao", namespace) {
+	if d.checkServiceExists(ctx, "controller-vault", namespace) {
 		logger.V(1).Info("OpenBao service found", "namespace", namespace)
 		return true
 	}
 
 	if namespace != "k-paas-system" {
-		if d.checkServiceExists(ctx, "openbao", "openbao") {
+		if d.checkServiceExists(ctx, "controller-vault", "openbao") {
 			logger.V(1).Info("OpenBao service found in default k-paas-system namespace")
 			return true
 		}
